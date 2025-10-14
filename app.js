@@ -12,7 +12,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const pdfContainer = document.getElementById('pdf-container');
     const pdfIframe = document.getElementById('pdf-iframe');
     const imageContainer = document.getElementById('image-container');
-    const pdfImage = document.getElementById('pdf-image');
+    const pdfCanvas = document.getElementById('pdf-canvas');
     const imageLoading = document.getElementById('image-loading');
     const viewerControls = document.getElementById('viewer-controls');
     const imageModeBtn = document.getElementById('image-mode-btn');
@@ -21,11 +21,14 @@ document.addEventListener('DOMContentLoaded', () => {
     const loader = document.getElementById('loader');
     const errorMessage = document.getElementById('error-message');
     
-    // Image Viewer Elements
+    // Image Viewer Elements (canvas-based)
     const imagePageNum = document.getElementById('image-page-num');
     const imagePageCount = document.getElementById('image-page-count');
     const imagePrevPageBtn = document.getElementById('image-prev-page');
     const imageNextPageBtn = document.getElementById('image-next-page');
+    const imageZoomInBtn = document.getElementById('image-zoom-in');
+    const imageZoomOutBtn = document.getElementById('image-zoom-out');
+    const imageZoomLevel = document.getElementById('image-zoom-level');
     
     const branchSelector = document.getElementById('branch-selector');
     const branchStats = document.getElementById('branch-stats');
@@ -36,6 +39,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let currentBranch = 'main';
     let pdfDoc = null;
     let currentPage = 1;
+    let imageScale = 1.5;
     let viewMode = 'image'; // Default to image viewer
     let currentSha = null;
 
@@ -56,24 +60,39 @@ document.addEventListener('DOMContentLoaded', () => {
         return 'default';
     }
 
-    // --- PDF Rendering Functions ---
-    async function loadPdfFromCommit(sha) {
-        currentSha = sha;
+    // --- Image Viewer Functions (Canvas-based like the original) ---
+    async function renderImagePage(pageNumber) {
+        if (!pdfDoc) return;
         
-        if (viewMode === 'image') {
-            await loadImageView(sha);
-        } else {
-            await loadPdfView(sha);
-        }
+        imageLoading.classList.remove('hidden');
+        
+        const page = await pdfDoc.getPage(pageNumber);
+        const viewport = page.getViewport({ scale: imageScale });
+        const context = pdfCanvas.getContext('2d');
+        
+        pdfCanvas.height = viewport.height;
+        pdfCanvas.width = viewport.width;
+
+        const renderContext = {
+            canvasContext: context,
+            viewport: viewport
+        };
+
+        await page.render(renderContext).promise;
+        
+        imageLoading.classList.add('hidden');
+        imagePageNum.textContent = pageNumber;
+        imagePrevPageBtn.disabled = pageNumber <= 1;
+        imageNextPageBtn.disabled = pageNumber >= pdfDoc.numPages;
     }
 
-    // --- Image Viewer Functions ---
     async function loadImageView(sha) {
         try {
-            imageLoading.classList.remove('hidden');
             const rawPdfUrl = `https://raw.githubusercontent.com/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}/${sha}/${FILE_PATH}`;
             
-            // Load PDF to get page count
+            imageLoading.classList.remove('hidden');
+            
+            // Load PDF with CORS support
             const loadingTask = pdfjsLib.getDocument({
                 url: rawPdfUrl,
                 cMapUrl: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/cmaps/',
@@ -91,49 +110,28 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    async function renderImagePage(pageNumber) {
-        if (!pdfDoc) return;
-        
-        imageLoading.classList.remove('hidden');
-        
-        const page = await pdfDoc.getPage(pageNumber);
-        const viewport = page.getViewport({ scale: 2.0 }); // Higher scale for better image quality
-        
-        const canvas = document.createElement('canvas');
-        const context = canvas.getContext('2d');
-        canvas.height = viewport.height;
-        canvas.width = viewport.width;
-
-        const renderContext = {
-            canvasContext: context,
-            viewport: viewport
-        };
-
-        await page.render(renderContext).promise;
-        
-        // Convert canvas to image
-        pdfImage.src = canvas.toDataURL('image/png');
-        pdfImage.onload = () => {
-            imageLoading.classList.add('hidden');
-        };
-        
-        imagePageNum.textContent = pageNumber;
-        imagePrevPageBtn.disabled = pageNumber <= 1;
-        imageNextPageBtn.disabled = pageNumber >= pdfDoc.numPages;
-    }
-
     // --- Native PDF Viewer Functions ---
     async function loadPdfView(sha) {
         try {
             const rawPdfUrl = `https://raw.githubusercontent.com/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}/${sha}/${FILE_PATH}`;
             
             // Use Mozilla's PDF.js viewer which provides native PDF experience without download
-            // This viewer supports text selection, links, search, zoom, etc.
             const pdfViewerUrl = `https://mozilla.github.io/pdf.js/web/viewer.html?file=${encodeURIComponent(rawPdfUrl)}`;
             pdfIframe.src = pdfViewerUrl;
         } catch (error) {
             console.error('Error loading PDF:', error);
             alert('Failed to load PDF. Please try again.');
+        }
+    }
+
+    // --- Main PDF Loading Function ---
+    async function loadPdfFromCommit(sha) {
+        currentSha = sha;
+        
+        if (viewMode === 'image') {
+            await loadImageView(sha);
+        } else {
+            await loadPdfView(sha);
         }
     }
 
@@ -170,6 +168,19 @@ document.addEventListener('DOMContentLoaded', () => {
     imageNextPageBtn.addEventListener('click', () => {
         if (currentPage >= pdfDoc.numPages) return;
         currentPage++;
+        renderImagePage(currentPage);
+    });
+
+    imageZoomInBtn.addEventListener('click', () => {
+        imageScale += 0.25;
+        imageZoomLevel.textContent = Math.round(imageScale * 100 / 1.5) + '%';
+        renderImagePage(currentPage);
+    });
+
+    imageZoomOutBtn.addEventListener('click', () => {
+        if (imageScale <= 0.5) return;
+        imageScale -= 0.25;
+        imageZoomLevel.textContent = Math.round(imageScale * 100 / 1.5) + '%';
         renderImagePage(currentPage);
     });
 

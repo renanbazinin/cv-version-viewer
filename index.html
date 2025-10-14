@@ -87,23 +87,24 @@
 
                 <!-- Image Viewer -->
                 <div id="image-container" class="w-full h-full hidden flex flex-col border-2 border-gray-700 rounded-lg shadow-2xl bg-gray-800">
-                    <div class="flex items-center justify-center bg-gray-700 p-3 border-b border-gray-600">
-                        <div class="image-controls">
+                    <div class="flex items-center justify-between bg-gray-700 p-3 border-b border-gray-600">
+                        <div class="flex items-center gap-3">
+                            <button id="image-prev-page" class="px-3 py-1 bg-blue-600 hover:bg-blue-700 rounded text-sm font-medium transition">Previous</button>
                             <span class="text-sm text-gray-300">
                                 Page <span id="image-page-num">1</span> / <span id="image-page-count">1</span>
                             </span>
-                            <div class="flex gap-2">
-                                <button id="image-prev-page" class="px-3 py-1 bg-blue-600 hover:bg-blue-700 rounded text-sm font-medium transition">Previous</button>
-                                <button id="image-next-page" class="px-3 py-1 bg-blue-600 hover:bg-blue-700 rounded text-sm font-medium transition">Next</button>
-                            </div>
+                            <button id="image-next-page" class="px-3 py-1 bg-blue-600 hover:bg-blue-700 rounded text-sm font-medium transition">Next</button>
+                        </div>
+                        <div class="flex items-center gap-3">
+                            <button id="image-zoom-out" class="px-3 py-1 bg-gray-600 hover:bg-gray-500 rounded text-sm font-medium transition">-</button>
+                            <span id="image-zoom-level" class="text-sm text-gray-300">100%</span>
+                            <button id="image-zoom-in" class="px-3 py-1 bg-gray-600 hover:bg-gray-500 rounded text-sm font-medium transition">+</button>
                         </div>
                     </div>
-                    <div class="flex-1 overflow-auto bg-gray-900 p-4 flex items-center justify-center">
-                        <div class="relative">
-                            <img id="pdf-image" src="" alt="PDF Page" class="max-w-full h-auto">
-                            <div id="image-loading" class="loading-overlay hidden">
-                                <div class="loading-spinner"></div>
-                            </div>
+                    <div class="flex-1 overflow-auto bg-gray-900 p-4 relative">
+                        <canvas id="pdf-canvas" class="mx-auto shadow-lg"></canvas>
+                        <div id="image-loading" class="loading-overlay hidden">
+                            <div class="loading-spinner"></div>
                         </div>
                     </div>
                 </div>
