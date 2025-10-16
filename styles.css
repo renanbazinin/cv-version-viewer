@@ -162,3 +162,38 @@ body {
     0% { transform: rotate(0deg); }
     100% { transform: rotate(360deg); }
 }
+
+/* Mobile optimizations */
+@media (max-width: 768px) {
+    #pdf-viewer-container {
+        min-height: 60vh;
+        max-height: 60vh;
+    }
+    
+    #timeline-wrapper {
+        flex-shrink: 0;
+        position: relative;
+    }
+    
+    .viewer-toggle button {
+        padding: 6px 12px;
+        font-size: 0.8rem;
+    }
+    
+    /* Ensure viewers take up available space on mobile */
+    #image-container,
+    #pdf-container {
+        min-height: 50vh;
+        max-height: 55vh;
+    }
+    
+    /* Allow main content to scroll on mobile */
+    main {
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+    
+    #pdf-viewer-container {
+        flex-shrink: 0;
+    }
+}
