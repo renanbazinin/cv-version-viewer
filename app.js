@@ -40,7 +40,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let pdfDoc = null;
     let currentPage = 1;
     let imageScale = 1.5;
-    let viewMode = 'image'; // Default to image viewer
+    let viewMode = 'pdf'; // Default to PDF viewer
     let currentSha = null;
 
     // --- Helper Functions ---
@@ -256,7 +256,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (firstItem) firstItem.classList.add('active');
                 loader.classList.add('hidden');
                 viewerControls.classList.remove('hidden');
-                imageContainer.classList.remove('hidden');
+                pdfContainer.classList.remove('hidden');
                 branchStats.classList.remove('hidden');
                 commitCountEl.textContent = commitsData.length;
             } else {
