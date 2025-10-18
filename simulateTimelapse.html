@@ -115,6 +115,7 @@
         <input type="checkbox" id="loop" checked />
         Loop
       </label>
+  <button id="sortToggle" class="btn" disabled>Mode: Branch + Commit</button>
       <span id="status" class="stat">Preparing…</span>
     </div>
   </header>
@@ -170,7 +171,8 @@
     const progressBar = document.getElementById('progressBar');
     const branchPill  = document.getElementById('branchPill');
     const msgPill     = document.getElementById('msgPill');
-    const playPauseBtn= document.getElementById('playPauseBtn');
+  const playPauseBtn= document.getElementById('playPauseBtn');
+  const sortToggleBtn= document.getElementById('sortToggle');
     const fpsInput    = document.getElementById('fps');
     const fpsVal      = document.getElementById('fpsVal');
     const loopInput   = document.getElementById('loop');
@@ -254,7 +256,7 @@
       const branches = [];
       let guard = 0;
       while (url) {
-  const res = await githubFetch(url);
+        const res = await githubFetch(url);
         if (!res.ok) throw new Error(`Branches: HTTP ${res.status}`);
         const page = await res.json();
         branches.push(...page);
@@ -313,7 +315,8 @@
           for (const c of commits) {
             const sha = c.sha;
             const msg = (c.commit?.message || '').split('\n')[0];
-            frames.push({ branch: b.name, sha, msg, url: rawPdfUrlAtCommit(sha) });
+            const commitDate = c.commit?.committer?.date || c.commit?.author?.date || null;
+            frames.push({ branch: b.name, sha, msg, commitDate, url: rawPdfUrlAtCommit(sha) });
           }
         } catch (e) {
           showError(`Failed to list commits for ${b.name}: ${e.message}`);
@@ -399,20 +402,69 @@
     }
 
     // ====== Timelapse player (crossfade with double <img>) ======
+    const SortModes = {
+      BRANCH: 'branch',
+      COMMIT: 'commit'
+    };
+
     const state = {
       frames: [],
+      framesBranchOrder: [],
+      framesCommitOrder: [],
       idx: 0,
       timer: null,
       fps: 2,
       playing: false,
-      frontIsA: true, // which layer is currently shown
+      frontIsA: true,
+      sortMode: SortModes.BRANCH,
     };
 
     function updateOverlay(frame) {
       branchPill.textContent = frame.branch;
       msgPill.textContent = frame.msg || '(no message)';
       msgPill.title = frame.msg || '';
-      statusEl.textContent = `Frame ${state.idx + 1} / ${state.frames.length}`;
+      const modeLabel = state.sortMode === SortModes.BRANCH ? 'Branch + Commit' : 'Commit Date';
+      statusEl.textContent = `Frame ${state.idx + 1} / ${state.frames.length} • Mode: ${modeLabel}`;
+    }
+
+    function updateSortToggleLabel() {
+      if (state.sortMode === SortModes.BRANCH) {
+        sortToggleBtn.textContent = 'Mode: Branch + Commit';
+      } else {
+        sortToggleBtn.textContent = 'Mode: Commit Date';
+      }
+    }
+
+    async function applySortMode(mode) {
+      if (!state.frames.length) {
+        state.sortMode = mode;
+        updateSortToggleLabel();
+        return;
+      }
+      const currentFrame = state.frames[state.idx] || null;
+      state.sortMode = mode;
+      if (mode === SortModes.COMMIT) {
+        state.frames = state.framesCommitOrder;
+      } else {
+        state.frames = state.framesBranchOrder;
+      }
+
+      let nextIndex = 0;
+      if (currentFrame) {
+        const targetList = state.frames;
+        const foundIdx = targetList.findIndex(f => f.sha === currentFrame.sha);
+        if (foundIdx >= 0) {
+          nextIndex = foundIdx;
+        }
+      }
+
+      state.idx = nextIndex;
+      updateSortToggleLabel();
+
+      const wasPlaying = state.playing;
+      if (wasPlaying) pause();
+      await showFrame(state.idx);
+      if (wasPlaying) play();
     }
 
     async function showFrame(i) {
@@ -511,7 +563,7 @@
 
     // ====== Bootstrap ======
     (async function init() {
-      contextEl.textContent = `repo: ${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME} • file: ${FILE_PATH} • order: branches(oldest→newest), commits(oldest→newest)`;
+  contextEl.textContent = `repo: ${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME} • file: ${FILE_PATH} • default order: branches(oldest→newest) • toggle to merge commits by date`;
       fpsVal.textContent = `${fpsInput.value} fps`;
 
       try {
@@ -534,12 +586,27 @@
           return;
         }
 
+        state.framesBranchOrder = state.frames.slice();
+        state.framesCommitOrder = state.frames.slice().sort((a, b) => {
+          const da = a.commitDate ? new Date(a.commitDate).getTime() : 0;
+          const db = b.commitDate ? new Date(b.commitDate).getTime() : 0;
+          return da - db;
+        });
+        state.sortMode = SortModes.BRANCH;
+        state.frames = state.framesBranchOrder;
+
         // Hide center UI and enable controls
         centerUI.style.display = 'none';
         playPauseBtn.disabled = false;
         playPauseBtn.textContent = 'Pause';
         playPauseBtn.onclick = () => state.playing ? pause() : play();
         fpsInput.oninput = (e) => setFps(parseFloat(e.target.value));
+        sortToggleBtn.disabled = false;
+        sortToggleBtn.onclick = () => {
+          const nextMode = state.sortMode === SortModes.BRANCH ? SortModes.COMMIT : SortModes.BRANCH;
+          applySortMode(nextMode).catch(err => console.error('Sort toggle failed', err));
+        };
+        updateSortToggleLabel();
 
         // Prime first two images to avoid initial flash
         await setImage(layerA, state.frames[0].dataUrl);
