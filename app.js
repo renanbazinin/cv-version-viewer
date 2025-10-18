@@ -42,6 +42,61 @@ document.addEventListener('DOMContentLoaded', () => {
     let imageScale = 1.5;
     let viewMode = 'pdf'; // Default to PDF viewer
     let currentSha = null;
+    let githubTokenCache;
+
+    async function ensureGithubToken() {
+        if (githubTokenCache !== undefined) {
+            return githubTokenCache;
+        }
+        githubTokenCache = null;
+
+        // Prefer a token stored in localStorage when available
+        try {
+            if (typeof window !== 'undefined' && window.localStorage) {
+                const stored = window.localStorage.getItem('GITHUB_TOKEN');
+                if (stored && stored.trim()) {
+                    githubTokenCache = stored.trim();
+                }
+            }
+        } catch (err) {
+            console.info('Unable to read GitHub token from localStorage.', err);
+        }
+
+        // Fallback to .env file if no localStorage token was found
+        if (!githubTokenCache) {
+            try {
+                const res = await fetch('./.env', { cache: 'no-store' });
+                if (res.ok) {
+                    const text = await res.text();
+                    const match = text.match(/^\s*GITHUB_TOKEN\s*=\s*(.+)\s*$/m);
+                    if (match) {
+                        const value = match[1].trim().replace(/^['"]|['"]$/g, '');
+                        if (value) {
+                            githubTokenCache = value;
+                        }
+                    }
+                }
+            } catch (err) {
+                console.info('GitHub token not found in .env (falling back to unauthenticated requests).', err);
+            }
+        }
+
+        return githubTokenCache;
+    }
+
+    async function githubFetch(url, options = {}) {
+        const opts = { ...options };
+        const headers = new Headers(opts.headers || {});
+        if (!headers.has('Accept')) {
+            headers.set('Accept', 'application/vnd.github+json');
+        }
+        const token = await ensureGithubToken();
+        if (token && !headers.has('Authorization')) {
+            headers.set('Authorization', `Bearer ${token}`);
+        }
+        opts.headers = headers;
+        return fetch(url, opts);
+    }
 
     // --- Helper Functions ---
     function getBranchClass(branchName) {
@@ -187,11 +242,26 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- Fetch Branches ---
     async function fetchBranches() {
         try {
-            const response = await fetch(BRANCHES_API);
+            const response = await githubFetch(BRANCHES_API);
             if (!response.ok) {
                 throw new Error(`Failed to fetch branches: ${response.status}`);
             }
             branchesData = await response.json();
+            
+            // Get detailed branch info to find the most recently updated one
+            const branchDetailsPromises = branchesData.map(async (branch) => {
+                const commitResponse = await githubFetch(branch.commit.url);
+                const commitData = await commitResponse.json();
+                return {
+                    name: branch.name,
+                    lastCommitDate: new Date(commitData.commit.author.date)
+                };
+            });
+            
+            const branchDetails = await Promise.all(branchDetailsPromises);
+            
+            // Sort branches by last commit date (most recent first)
+            branchDetails.sort((a, b) => b.lastCommitDate - a.lastCommitDate);
             
             // Populate branch selector
             branchSelector.innerHTML = '';
@@ -202,13 +272,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 branchSelector.appendChild(option);
             });
 
-            // Set default branch (prefer main/master)
-            const defaultBranch = branchesData.find(b => b.name === 'main' || b.name === 'master');
-            if (defaultBranch) {
-                currentBranch = defaultBranch.name;
-                branchSelector.value = currentBranch;
-            } else if (branchesData.length > 0) {
-                currentBranch = branchesData[0].name;
+            // Set default branch to the most recently updated one
+            if (branchDetails.length > 0) {
+                currentBranch = branchDetails[0].name;
                 branchSelector.value = currentBranch;
             }
 
@@ -224,7 +290,7 @@ document.addEventListener('DOMContentLoaded', () => {
     async function fetchCommitsForBranch(branchName) {
         try {
             const API_URL = `https://api.github.com/repos/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}/commits?path=${FILE_PATH}&sha=${branchName}`;
-            const response = await fetch(API_URL);
+            const response = await githubFetch(API_URL);
             if (!response.ok) {
                 throw new Error(`GitHub API request failed: ${response.status}`);
             }
