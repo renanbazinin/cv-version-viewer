@@ -116,7 +116,8 @@
         <input type="checkbox" id="loop" checked />
         Loop
       </label>
-  <button id="sortToggle" class="btn" disabled>Mode: Branch + Commit</button>
+      <button id="sortToggle" class="btn" disabled>Mode: Branch + Commit</button>
+      <button id="downloadAllBtn" class="btn" disabled>Download All Images</button>
       <span id="status" class="stat">Preparing…</span>
     </div>
   </header>
@@ -147,6 +148,8 @@
 
   <!-- PDF.js (v3) -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <!-- JSZip for creating zip archives -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
   <script>
     // ====== Hard-coded repo config ======
     const GITHUB_REPO_OWNER = 'renanbazinin';
@@ -172,14 +175,13 @@
     const progressBar = document.getElementById('progressBar');
     const branchPill  = document.getElementById('branchPill');
     const msgPill     = document.getElementById('msgPill');
-  const playPauseBtn= document.getElementById('playPauseBtn');
-  const sortToggleBtn= document.getElementById('sortToggle');
+    const playPauseBtn= document.getElementById('playPauseBtn');
+    const sortToggleBtn= document.getElementById('sortToggle');
+    const downloadAllBtn= document.getElementById('downloadAllBtn');
     const fpsInput    = document.getElementById('fps');
     const fpsVal      = document.getElementById('fpsVal');
     const loopInput   = document.getElementById('loop');
-    const statusEl    = document.getElementById('status');
-
-    // ====== PDF.js setup ======
+    const statusEl    = document.getElementById('status');    // ====== PDF.js setup ======
     pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 
     // ====== Utilities ======
@@ -358,13 +360,8 @@
       }
       await pdf.destroy();
 
-      // Use WebP for smaller memory; fallback to PNG if unsupported
-      let dataUrl;
-      try {
-        dataUrl = off.toDataURL('image/webp', 0.92);
-      } catch {
-        dataUrl = off.toDataURL('image/png');
-      }
+      // Use PNG for maximum compatibility
+      const dataUrl = off.toDataURL('image/png');
       return dataUrl;
     }
 
@@ -555,6 +552,64 @@
       if (state.playing) { pause(); play(); }
     }
 
+    // Download all images as high-quality PNGs
+    async function downloadAllImages() {
+      if (!state.frames.length) return;
+      
+      downloadAllBtn.disabled = true;
+      const originalText = downloadAllBtn.textContent;
+      downloadAllBtn.textContent = 'Downloading...';
+      
+      try {
+        // Use JSZip to create a zip file
+        const JSZip = window.JSZip;
+        if (!JSZip) {
+          alert('JSZip library not loaded. Please refresh the page.');
+          return;
+        }
+        
+        const zip = new JSZip();
+        const folder = zip.folder('cv-versions');
+        
+        for (let i = 0; i < state.frames.length; i++) {
+          const frame = state.frames[i];
+          if (!frame.dataUrl) continue;
+          
+          downloadAllBtn.textContent = `Downloading... ${i + 1}/${state.frames.length}`;
+          
+          // Extract base64 data (all images are PNG now)
+          const base64Data = frame.dataUrl.split(',')[1];
+          const filename = `${String(i + 1).padStart(3, '0')}_${frame.branch}_${frame.sha.slice(0, 7)}.png`;
+          
+          folder.file(filename, base64Data, { base64: true });
+        }
+        
+        downloadAllBtn.textContent = 'Generating ZIP...';
+        const content = await zip.generateAsync({ type: 'blob' });
+        
+        // Trigger download
+        const url = URL.createObjectURL(content);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `cv-versions-${GITHUB_REPO_OWNER}-${GITHUB_REPO_NAME}.zip`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        
+        downloadAllBtn.textContent = 'Download Complete!';
+        setTimeout(() => {
+          downloadAllBtn.textContent = originalText;
+          downloadAllBtn.disabled = false;
+        }, 2000);
+      } catch (err) {
+        console.error('Download failed:', err);
+        alert('Failed to download images: ' + (err.message || String(err)));
+        downloadAllBtn.textContent = originalText;
+        downloadAllBtn.disabled = false;
+      }
+    }
+
     // Keyboard shortcuts
     window.addEventListener('keydown', (e) => {
       if (e.code === 'Space') { e.preventDefault(); state.playing ? pause() : play(); }
@@ -608,6 +663,10 @@
           applySortMode(nextMode).catch(err => console.error('Sort toggle failed', err));
         };
         updateSortToggleLabel();
+        
+        downloadAllBtn.disabled = false;
+        downloadAllBtn.textContent = 'Download All Images';
+        downloadAllBtn.onclick = () => downloadAllImages().catch(err => console.error('Download failed', err));
 
         // Prime first two images to avoid initial flash
         await setImage(layerA, state.frames[0].dataUrl);
