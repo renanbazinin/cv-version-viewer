@@ -1,0 +1,562 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Latest CV - Renan Bazinin</title>
+    
+    <!-- Favicon -->
+    <link rel="icon" type="image/png" href="https://i.imgur.com/xYEgGVW.png">
+    
+    <!-- Meta Description -->
+    <meta name="description" content="View the latest version of Renan Bazinin's CV with PDF and Image viewer modes.">
+    <meta name="author" content="Renan Bazinin">
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            font-family: system-ui, -apple-system, sans-serif;
+        }
+        .viewer-container {
+            position: absolute;
+            top: 60px;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: #1a1a1a;
+        }
+        .header {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 60px;
+            background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+            border-bottom: 2px solid #334155;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0 24px;
+            z-index: 1000;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3);
+        }
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+        .header-title {
+            color: #60a5fa;
+            font-size: 20px;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+        }
+        .header-link {
+            color: #94a3b8;
+            text-decoration: none;
+            font-size: 14px;
+            padding: 8px 16px;
+            border-radius: 6px;
+            transition: all 0.2s;
+            border: 1px solid transparent;
+        }
+        .header-link:hover {
+            color: #60a5fa;
+            background: rgba(96, 165, 250, 0.1);
+            border-color: #334155;
+        }
+        .viewer-toggle {
+            display: flex;
+            gap: 8px;
+            background: #0f172a;
+            padding: 4px;
+            border-radius: 8px;
+            border: 1px solid #334155;
+        }
+        .viewer-toggle button {
+            padding: 8px 16px;
+            border: none;
+            background: transparent;
+            color: #94a3b8;
+            cursor: pointer;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .viewer-toggle button:hover {
+            color: #e2e8f0;
+            background: rgba(148, 163, 184, 0.1);
+        }
+        .viewer-toggle button.active {
+            background: #3b82f6;
+            color: white;
+        }
+        .viewer-toggle svg {
+            width: 16px;
+            height: 16px;
+        }
+        .viewer-toggle .btn-text {
+            display: inline;
+        }
+        
+        /* Mobile styles */
+        @media (max-width: 768px) {
+            .header {
+                height: 50px;
+                padding: 0 12px;
+            }
+            .viewer-container {
+                top: 50px;
+            }
+            .header-left {
+                gap: 8px;
+            }
+            .header-title {
+                font-size: 16px;
+            }
+            .header-link {
+                font-size: 12px;
+                padding: 6px 10px;
+            }
+            .header-link svg {
+                width: 14px;
+                height: 14px;
+            }
+            .viewer-toggle {
+                padding: 3px;
+                gap: 4px;
+            }
+            .viewer-toggle button {
+                padding: 6px 10px;
+                font-size: 12px;
+                gap: 4px;
+            }
+            .viewer-toggle svg {
+                width: 14px;
+                height: 14px;
+            }
+            .viewer-toggle .btn-text {
+                display: none;
+            }
+            .image-controls {
+                padding: 8px 12px;
+                flex-direction: column;
+                gap: 8px;
+            }
+            .image-controls .control-group {
+                gap: 8px;
+            }
+            .image-controls button {
+                padding: 6px 12px;
+                font-size: 12px;
+            }
+            .image-canvas-wrapper {
+                padding: 10px;
+            }
+        }
+        #pdf-iframe {
+            width: 100%;
+            height: 100%;
+            border: none;
+            background: white;
+        }
+        #image-container {
+            width: 100%;
+            height: 100%;
+            overflow: auto;
+            background: #0a0a0a;
+            display: none;
+        }
+        #image-container.active {
+            display: flex;
+            flex-direction: column;
+        }
+        #pdf-container {
+            width: 100%;
+            height: 100%;
+            display: flex;
+        }
+        #pdf-container.hidden {
+            display: none;
+        }
+        .image-controls {
+            background: #1e293b;
+            padding: 12px 24px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid #334155;
+        }
+        .image-controls button {
+            padding: 8px 16px;
+            background: #3b82f6;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: background 0.2s;
+        }
+        .image-controls button:hover:not(:disabled) {
+            background: #2563eb;
+        }
+        .image-controls button:disabled {
+            background: #475569;
+            cursor: not-allowed;
+        }
+        .image-controls .control-group {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+        }
+        .image-controls .page-info,
+        .image-controls .zoom-info {
+            color: #cbd5e1;
+            font-size: 14px;
+        }
+        .image-canvas-wrapper {
+            flex: 1;
+            overflow: auto;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        #pdf-canvas {
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5);
+            background: white;
+        }
+        .loader {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            color: #94a3b8;
+        }
+        .spinner {
+            border: 3px solid #334155;
+            border-top-color: #3b82f6;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 16px;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="header-left">
+            <h1 class="header-title">Latest CV</h1>
+            <a href="index.html" class="header-link">
+                <svg style="display: inline; width: 16px; height: 16px; margin-right: 4px; vertical-align: middle;" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                </svg>
+                Version History
+            </a>
+        </div>
+        <div class="viewer-toggle">
+            <button id="pdf-mode-btn" class="active">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"></path>
+                </svg>
+                <span class="btn-text">PDF Viewer</span>
+            </button>
+            <button id="image-mode-btn">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path>
+                </svg>
+                <span class="btn-text">Image Viewer</span>
+            </button>
+        </div>
+    </div>
+
+    <div class="viewer-container">
+        <div id="loader" class="loader">
+            <div class="spinner"></div>
+            <p>Loading latest CV...</p>
+        </div>
+
+        <div id="pdf-container">
+            <iframe id="pdf-iframe"></iframe>
+        </div>
+
+        <div id="image-container">
+            <div class="image-controls">
+                <div class="control-group">
+                    <button id="prev-page">Previous</button>
+                    <span class="page-info">
+                        Page <span id="page-num">1</span> / <span id="page-count">1</span>
+                    </span>
+                    <button id="next-page">Next</button>
+                </div>
+                <div class="control-group">
+                    <button id="zoom-out">−</button>
+                    <span class="zoom-info" id="zoom-level">100%</span>
+                    <button id="zoom-in">+</button>
+                </div>
+            </div>
+            <div class="image-canvas-wrapper">
+                <canvas id="pdf-canvas"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Configure PDF.js worker
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+        // Configuration
+        const GITHUB_REPO_OWNER = 'renanbazinin';
+        const GITHUB_REPO_NAME = 'CV-RENAN';
+        const FILE_PATH = 'CV-RenanBazinin.pdf';
+
+        // DOM elements
+        const loader = document.getElementById('loader');
+        const pdfContainer = document.getElementById('pdf-container');
+        const pdfIframe = document.getElementById('pdf-iframe');
+        const imageContainer = document.getElementById('image-container');
+        const pdfCanvas = document.getElementById('pdf-canvas');
+        const pdfModeBtn = document.getElementById('pdf-mode-btn');
+        const imageModeBtn = document.getElementById('image-mode-btn');
+        const prevPageBtn = document.getElementById('prev-page');
+        const nextPageBtn = document.getElementById('next-page');
+        const zoomInBtn = document.getElementById('zoom-in');
+        const zoomOutBtn = document.getElementById('zoom-out');
+        const pageNumSpan = document.getElementById('page-num');
+        const pageCountSpan = document.getElementById('page-count');
+        const zoomLevelSpan = document.getElementById('zoom-level');
+
+        let pdfDoc = null;
+        let currentPage = 1;
+        let imageScale = 1.5;
+        let viewMode = 'pdf';
+        let latestPdfUrl = '';
+
+        // GitHub token helper
+        let githubTokenCache;
+        async function ensureGithubToken() {
+            if (githubTokenCache !== undefined) {
+                return githubTokenCache;
+            }
+            githubTokenCache = null;
+            try {
+                if (typeof window !== 'undefined' && window.localStorage) {
+                    const stored = window.localStorage.getItem('GITHUB_TOKEN');
+                    if (stored && stored.trim()) {
+                        githubTokenCache = stored.trim();
+                    }
+                }
+            } catch (err) {
+                console.info('Unable to read GitHub token from localStorage.', err);
+            }
+            if (!githubTokenCache) {
+                try {
+                    const res = await fetch('./.env', { cache: 'no-store' });
+                    if (res.ok) {
+                        const text = await res.text();
+                        const match = text.match(/^\s*GITHUB_TOKEN\s*=\s*(.+)\s*$/m);
+                        if (match) {
+                            const value = match[1].trim().replace(/^['"]|['"]$/g, '');
+                            if (value) {
+                                githubTokenCache = value;
+                            }
+                        }
+                    }
+                } catch (err) {
+                    console.info('GitHub token not found in .env (falling back to unauthenticated requests).', err);
+                }
+            }
+            return githubTokenCache;
+        }
+
+        async function githubFetch(url, options = {}) {
+            const opts = { ...options };
+            const headers = new Headers(opts.headers || {});
+            if (!headers.has('Accept')) {
+                headers.set('Accept', 'application/vnd.github+json');
+            }
+            const token = await ensureGithubToken();
+            if (token && !headers.has('Authorization')) {
+                headers.set('Authorization', `Bearer ${token}`);
+            }
+            opts.headers = headers;
+            return fetch(url, opts);
+        }
+
+        // Fetch latest commit from all branches
+        async function fetchLatestCommit() {
+            try {
+                // Fetch all branches
+                const branchesResponse = await githubFetch(
+                    `https://api.github.com/repos/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}/branches`
+                );
+                if (!branchesResponse.ok) {
+                    throw new Error(`Failed to fetch branches: ${branchesResponse.status}`);
+                }
+                const branches = await branchesResponse.json();
+                
+                // Fetch the latest commit from each branch that has the file
+                let latestCommit = null;
+                let latestDate = 0;
+                
+                for (const branch of branches) {
+                    try {
+                        const commitsResponse = await githubFetch(
+                            `https://api.github.com/repos/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}/commits?path=${FILE_PATH}&sha=${branch.name}&per_page=1`
+                        );
+                        if (!commitsResponse.ok) continue;
+                        
+                        const commits = await commitsResponse.json();
+                        if (commits && commits.length > 0) {
+                            const commit = commits[0];
+                            const commitDate = new Date(commit.commit.committer.date).getTime();
+                            
+                            if (commitDate > latestDate) {
+                                latestDate = commitDate;
+                                latestCommit = commit.sha;
+                            }
+                        }
+                    } catch (err) {
+                        console.warn(`Failed to fetch commits for branch ${branch.name}:`, err);
+                    }
+                }
+                
+                if (latestCommit) {
+                    return latestCommit;
+                }
+                throw new Error('No commits found across all branches');
+            } catch (error) {
+                console.error('Error fetching latest commit:', error);
+                return null;
+            }
+        }
+
+        // Load PDF viewer
+        async function loadPdfView() {
+            const pdfViewerUrl = `https://mozilla.github.io/pdf.js/web/viewer.html?file=${encodeURIComponent(latestPdfUrl)}`;
+            pdfIframe.src = pdfViewerUrl;
+        }
+
+        // Load image viewer
+        async function loadImageView() {
+            try {
+                const loadingTask = pdfjsLib.getDocument({
+                    url: latestPdfUrl,
+                    cMapUrl: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/cmaps/',
+                    cMapPacked: true
+                });
+                
+                pdfDoc = await loadingTask.promise;
+                pageCountSpan.textContent = pdfDoc.numPages;
+                currentPage = 1;
+                await renderPage(currentPage);
+            } catch (error) {
+                console.error('Error loading PDF for image view:', error);
+                alert('Failed to load PDF. Please try again.');
+            }
+        }
+
+        // Render page
+        async function renderPage(pageNumber) {
+            if (!pdfDoc) return;
+            
+            const page = await pdfDoc.getPage(pageNumber);
+            const viewport = page.getViewport({ scale: imageScale });
+            const context = pdfCanvas.getContext('2d');
+            
+            pdfCanvas.height = viewport.height;
+            pdfCanvas.width = viewport.width;
+
+            await page.render({
+                canvasContext: context,
+                viewport: viewport
+            }).promise;
+            
+            pageNumSpan.textContent = pageNumber;
+            prevPageBtn.disabled = pageNumber <= 1;
+            nextPageBtn.disabled = pageNumber >= pdfDoc.numPages;
+        }
+
+        // Switch view mode
+        function switchViewMode(mode) {
+            viewMode = mode;
+            
+            if (mode === 'image') {
+                imageModeBtn.classList.add('active');
+                pdfModeBtn.classList.remove('active');
+                imageContainer.classList.add('active');
+                pdfContainer.classList.add('hidden');
+                if (!pdfDoc) loadImageView();
+            } else {
+                pdfModeBtn.classList.add('active');
+                imageModeBtn.classList.remove('active');
+                pdfContainer.classList.remove('hidden');
+                imageContainer.classList.remove('active');
+            }
+        }
+
+        // Event listeners
+        pdfModeBtn.addEventListener('click', () => switchViewMode('pdf'));
+        imageModeBtn.addEventListener('click', () => switchViewMode('image'));
+
+        prevPageBtn.addEventListener('click', () => {
+            if (currentPage <= 1) return;
+            currentPage--;
+            renderPage(currentPage);
+        });
+
+        nextPageBtn.addEventListener('click', () => {
+            if (currentPage >= pdfDoc.numPages) return;
+            currentPage++;
+            renderPage(currentPage);
+        });
+
+        zoomInBtn.addEventListener('click', () => {
+            imageScale += 0.25;
+            zoomLevelSpan.textContent = Math.round(imageScale * 100 / 1.5) + '%';
+            renderPage(currentPage);
+        });
+
+        zoomOutBtn.addEventListener('click', () => {
+            if (imageScale <= 0.5) return;
+            imageScale -= 0.25;
+            zoomLevelSpan.textContent = Math.round(imageScale * 100 / 1.5) + '%';
+            renderPage(currentPage);
+        });
+
+        // Initialize
+        async function initialize() {
+            try {
+                const latestSha = await fetchLatestCommit();
+                if (!latestSha) {
+                    throw new Error('Could not fetch latest commit');
+                }
+                
+                latestPdfUrl = `https://raw.githubusercontent.com/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}/${latestSha}/${FILE_PATH}`;
+                
+                loader.style.display = 'none';
+                loadPdfView();
+            } catch (error) {
+                console.error('Error initializing:', error);
+                loader.innerHTML = '<div class="spinner"></div><p style="color: #ef4444;">Failed to load latest CV. Please try again later.</p>';
+            }
+        }
+
+        initialize();
+    </script>
+</body>
+</html>
