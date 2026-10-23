@@ -149,20 +149,23 @@
     <section id="errors" aria-live="polite"></section>
   </main>
 
-  <!-- PDF.js (v3, same build as the other pages) -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <!-- PDF.js (v3, same build as the other pages), pinned with SRI -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"
+          integrity="sha512-q+4liFwdPC/bNdhUpZx6aXDx/h77yEQtn4I1slHydcbZK34nLaR3cAeYSJshoxIOq3mjEf7xJE8YWIUHMn+oCQ=="
+          crossorigin="anonymous" referrerpolicy="no-referrer"></script>
   <script type="module">
-    import { GIFEncoder, quantize, applyPalette } from 'https://cdn.jsdelivr.net/npm/gifenc@1.0.3/dist/gifenc.esm.js';
+    import { GIFEncoder, quantize, applyPalette } from './gifenc.esm.js';
 
     // ====== Repo config (same as the other pages) ======
     const GITHUB_REPO_OWNER = 'renanbazinin';
     const GITHUB_REPO_NAME  = 'CV-RENAN';
     const FILE_PATH         = 'CV-RenanBazinin.pdf';
+    const DEFAULT_BRANCH    = 'main';
     const API               = `https://api.github.com/repos/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}`;
-    const CONCURRENCY       = 3;              // parallel PDF downloads/renders
+    const CONCURRENCY       = 3;              // parallel PDF renders
     const PAGE_ASPECT       = Math.SQRT2;     // A4 portrait; every frame gets the same size
-    const CACHE_KEY         = `cv-gif-commits:${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}`;
-    const CACHE_TTL_MS      = 10 * 60 * 1000; // reuse the commit list for 10 min (GitHub API rate limit)
+    const CACHE_KEY         = `cv-gif-versions-v2:${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}`;
+    const CACHE_TTL_MS      = 10 * 60 * 1000; // reuse the version list for 10 min (GitHub API rate limit)
 
     pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 
@@ -177,13 +180,16 @@
 
     // ====== State ======
     const state = {
-      versions: [],          // [{ branch, sha, msg, date }] — commits that touched the PDF
-      pdfCache: new Map(),   // sha -> Promise<{ bytes, hash } | { error }>
-      frames: null,          // quantized frames for the current render settings
-      framesKey: '',         // settings the frames were rendered with
+      versions: [],          // [{ branch, sha, msg, date }] — commits that changed the PDF
+      loadError: false,
+      pdfCache: new Map(),   // sha -> Promise<{ bytes, hash } | { error }>; failures are not kept
+      frames: null,          // quantized frames for the render settings in framesKey
+      framesKey: '',
+      incomplete: false,     // some downloads failed in a retryable way; the next Generate retries them
+      gifParams: null,       // timing the current preview was encoded with
+      failedParams: null,    // timing whose encode just failed (not retried automatically)
       gifUrl: null,
       busy: false,
-      encodeRun: 0,          // bumps to cancel a stale re-encode
     };
 
     // ====== GitHub helpers (token handling matches the other pages) ======
@@ -212,11 +218,21 @@
       const headers = new Headers({ Accept: 'application/vnd.github+json' });
       const token = await ensureGithubToken();
       if (token) headers.set('Authorization', `Bearer ${token}`);
-      const res = await fetch(url, { headers });
-      if (res.status === 403 && res.headers.get('x-ratelimit-remaining') === '0') {
-        const reset = Number(res.headers.get('x-ratelimit-reset')) * 1000;
-        const when = reset ? new Date(reset).toLocaleTimeString() : 'later';
-        throw new Error(`GitHub API rate limit reached. Try again after ${when}.`);
+      let res = await fetch(url, { headers });
+      if (res.status === 401 && token) {
+        // Expired or wrong token. The repo is public, so carry on without it.
+        githubTokenCache = null;
+        headers.delete('Authorization');
+        showError('Your saved GITHUB_TOKEN was rejected, so the page continues without it.');
+        res = await fetch(url, { headers });
+      }
+      if (res.status === 403 || res.status === 429) {
+        const retryAfter = Number(res.headers.get('retry-after'));
+        if (res.status === 429 || retryAfter || res.headers.get('x-ratelimit-remaining') === '0') {
+          const resetMs = retryAfter ? Date.now() + retryAfter * 1000 : Number(res.headers.get('x-ratelimit-reset')) * 1000;
+          const when = resetMs ? new Date(resetMs).toLocaleTimeString() : 'a few minutes';
+          throw new Error(`GitHub API rate limit reached${githubTokenCache ? '' : ' (60 requests per hour without a token)'}. Try again after ${when}.`);
+        }
       }
       if (!res.ok) throw new Error(`GitHub API HTTP ${res.status} for ${url}`);
       const next = (res.headers.get('Link') || '').match(/<([^>]+)>;\s*rel="next"/);
@@ -233,31 +249,72 @@
       return out;
     }
 
-    // Every commit (on any branch) that changed the PDF, deduplicated by SHA.
-    async function loadVersions() {
-      try {
-        const cached = JSON.parse(sessionStorage.getItem(CACHE_KEY) || 'null');
-        if (cached && Date.now() - cached.at < CACHE_TTL_MS && cached.versions?.length) return cached.versions;
-      } catch { /* ignore bad cache */ }
+    const commitTime = (c) => new Date(c.commit?.committer?.date || c.commit?.author?.date || 0).getTime();
 
-      const branches = await githubAll(`${API}/branches?per_page=100`);
+    // Commits on the default branch's own line (not ones it only got through a merge). If the walk
+    // runs past the fetched history, everything older than that window also counts as its own.
+    async function firstParentChain(branch) {
+      const commits = await githubAll(`${API}/commits?sha=${encodeURIComponent(branch)}&per_page=100`, 10);
+      const parent = new Map(commits.map((c) => [c.sha, c.parents?.[0]?.sha]));
+      const chain = new Set();
+      let sha = commits[0]?.sha;
+      for (; sha && parent.has(sha) && !chain.has(sha); sha = parent.get(sha)) chain.add(sha);
+      const truncated = !!sha && !parent.has(sha);
+      return { chain, before: truncated ? commitTime(commits[commits.length - 1]) : 0 };
+    }
+
+    // A commit appears on every branch that contains it. Label it with the branch it was made on:
+    // the default branch for its own line, otherwise the smallest branch that has it (a branch that
+    // merged others has a longer history, so the original branch keeps its name).
+    function assignBranches(lists, mainLine) {
       const bySha = new Map();
-      for (const b of branches) {
-        const commits = await githubAll(
-          `${API}/commits?sha=${encodeURIComponent(b.name)}&path=${encodeURIComponent(FILE_PATH)}&per_page=100`);
-        for (const c of commits) {
-          if (bySha.has(c.sha)) continue;   // shared history: keep the first branch that has it
-          bySha.set(c.sha, {
-            branch: b.name,
-            sha: c.sha,
-            msg: (c.commit?.message || '').split('\n')[0],
-            date: c.commit?.committer?.date || c.commit?.author?.date || null,
+      const add = (branch, c) => {
+        if (bySha.has(c.sha)) return;
+        bySha.set(c.sha, {
+          branch,
+          sha: c.sha,
+          msg: (c.commit?.message || '').split('\n')[0],
+          date: c.commit?.committer?.date || c.commit?.author?.date || null,
+        });
+      };
+      const onMainLine = (c) => mainLine.chain.has(c.sha) || (mainLine.before > 0 && commitTime(c) < mainLine.before);
+      for (const { name, commits } of lists) {
+        if (name === DEFAULT_BRANCH) commits.filter(onMainLine).forEach((c) => add(name, c));
+      }
+      const bySize = lists.slice().sort((a, b) => a.commits.length - b.commits.length || a.name.localeCompare(b.name));
+      for (const { name, commits } of bySize) commits.forEach((c) => add(name, c));
+      return [...bySha.values()];
+    }
+
+    function readCache() {
+      try { return JSON.parse(localStorage.getItem(CACHE_KEY) || 'null'); } catch { return null; }
+    }
+
+    async function loadVersions() {
+      const cached = readCache();
+      if (cached?.versions?.length && Date.now() - cached.at < CACHE_TTL_MS) return cached.versions;
+      try {
+        const branches = await githubAll(`${API}/branches?per_page=100`);
+        const lists = [];
+        for (const b of branches) {
+          lists.push({
+            name: b.name,
+            commits: await githubAll(`${API}/commits?sha=${encodeURIComponent(b.name)}&path=${encodeURIComponent(FILE_PATH)}&per_page=100`),
           });
         }
+        const mainLine = branches.some((b) => b.name === DEFAULT_BRANCH)
+          ? await firstParentChain(DEFAULT_BRANCH) : { chain: new Set(), before: 0 };
+        const versions = assignBranches(lists, mainLine);
+        try { localStorage.setItem(CACHE_KEY, JSON.stringify({ at: Date.now(), versions })); } catch { /* quota */ }
+        return versions;
+      } catch (e) {
+        // PDFs come from raw.githubusercontent.com (no API limit), so an older list still works.
+        if (cached?.versions?.length) {
+          showError(`${e.message} Using the CV list saved on ${new Date(cached.at).toLocaleString()}.`);
+          return cached.versions;
+        }
+        throw e;
       }
-      const versions = [...bySha.values()];
-      try { sessionStorage.setItem(CACHE_KEY, JSON.stringify({ at: Date.now(), versions })); } catch { /* quota */ }
-      return versions;
     }
 
     function orderedVersions(order) {
@@ -274,14 +331,17 @@
       return list;
     }
 
-    // ====== PDF download (cached) ======
+    // ====== PDF download (successes cached, failures retried next time) ======
     function getPdf(sha) {
-      if (!state.pdfCache.has(sha)) {
+      let pending = state.pdfCache.get(sha);
+      if (!pending) {
         const url = `https://raw.githubusercontent.com/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}/${sha}/${FILE_PATH}`;
-        state.pdfCache.set(sha, (async () => {
+        pending = (async () => {
           try {
             const res = await fetch(url);
-            if (!res.ok) return { error: `PDF not found (HTTP ${res.status})` };
+            // A 404 will never change (the PDF isn't in that commit); other failures are worth retrying.
+            if (res.status === 404) return { error: 'PDF not found in this commit', permanent: true };
+            if (!res.ok) return { error: `download failed (HTTP ${res.status})` };
             const bytes = await res.arrayBuffer();
             let hash = null;
             if (crypto?.subtle) {
@@ -290,14 +350,16 @@
             }
             return { bytes, hash };
           } catch (e) {
-            return { error: e.message || String(e) };
+            return { error: `download failed (${e.message || e})` };
           }
-        })());
+        })();
+        state.pdfCache.set(sha, pending);
+        pending.then((r) => { if (r.error && !r.permanent) state.pdfCache.delete(sha); });
       }
-      return state.pdfCache.get(sha);
+      return pending;
     }
 
-    // ====== Render one version to a fixed-size RGBA frame ======
+    // ====== Render one version to a fixed-size, quantized frame ======
     function frameSize(width, withLabel) {
       const pageH = Math.round(width * PAGE_ASPECT);
       const labelH = withLabel ? Math.max(28, Math.round(width * 0.055)) : 0;
@@ -317,80 +379,92 @@
     async function renderFrame(version, bytes, width, withLabel) {
       const { pageH, labelH, height } = frameSize(width, withLabel);
       const canvas = document.createElement('canvas');
-      canvas.width = width;
-      canvas.height = height;
-      const ctx = canvas.getContext('2d', { willReadFrequently: true });
-      ctx.fillStyle = '#ffffff';
-      ctx.fillRect(0, 0, width, pageH);
-
-      // PDF.js takes ownership of the buffer, so hand it a copy and keep the cache intact.
-      const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(bytes.slice(0)) }).promise;
+      const off = document.createElement('canvas');
       try {
-        const page = await pdf.getPage(1);
-        const base = page.getViewport({ scale: 1 });
-        const scale = Math.min(width / base.width, pageH / base.height);
-        const viewport = page.getViewport({ scale });
-        const off = document.createElement('canvas');
-        off.width = Math.round(viewport.width);
-        off.height = Math.round(viewport.height);
-        const offCtx = off.getContext('2d');
-        offCtx.fillStyle = '#ffffff';
-        offCtx.fillRect(0, 0, off.width, off.height);
-        await page.render({ canvasContext: offCtx, viewport }).promise;
-        ctx.drawImage(off, Math.round((width - off.width) / 2), Math.round((pageH - off.height) / 2));
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, width, pageH);
+
+        // PDF.js takes ownership of the buffer, so hand it a copy and keep the cache intact.
+        // isEvalSupported: false closes CVE-2024-4367 (font code run through eval).
+        const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(bytes.slice(0)), isEvalSupported: false }).promise;
+        try {
+          const page = await pdf.getPage(1);
+          const base = page.getViewport({ scale: 1 });
+          const scale = Math.min(width / base.width, pageH / base.height);
+          const viewport = page.getViewport({ scale });
+          off.width = Math.round(viewport.width);
+          off.height = Math.round(viewport.height);
+          const offCtx = off.getContext('2d');
+          offCtx.fillStyle = '#ffffff';
+          offCtx.fillRect(0, 0, off.width, off.height);
+          await page.render({ canvasContext: offCtx, viewport }).promise;
+          ctx.drawImage(off, Math.round((width - off.width) / 2), Math.round((pageH - off.height) / 2));
+        } finally {
+          await pdf.destroy();
+        }
+
+        if (withLabel) {
+          ctx.fillStyle = '#0b0c10';
+          ctx.fillRect(0, pageH, width, labelH);
+          const pad = Math.round(labelH * 0.45);
+          const fontPx = Math.round(labelH * 0.42);
+          ctx.font = `600 ${fontPx}px system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif`;
+          ctx.textBaseline = 'middle';
+          const y = pageH + labelH / 2;
+          const date = version.date ? version.date.slice(0, 10) : '';
+          ctx.fillStyle = '#7aa2ff';
+          ctx.fillText(date, pad, y);
+          const x = pad + ctx.measureText(date).width + pad * 0.8;
+          ctx.font = `400 ${fontPx}px system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif`;
+          ctx.fillStyle = '#e7eaf0';
+          ctx.fillText(fitText(ctx, `${version.branch} · ${version.msg || version.sha.slice(0, 7)}`, width - x - pad), x, y);
+        }
+
+        const { data } = ctx.getImageData(0, 0, width, height);
+        const palette = quantize(data, 256);
+        const index = applyPalette(data, palette);
+        return { index, palette, width, height, version };
       } finally {
-        await pdf.destroy();
+        // Free the backing stores now; iOS Safari caps total canvas memory.
+        off.width = off.height = 0;
+        canvas.width = canvas.height = 0;
       }
-
-      if (withLabel) {
-        ctx.fillStyle = '#0b0c10';
-        ctx.fillRect(0, pageH, width, labelH);
-        const pad = Math.round(labelH * 0.45);
-        const fontPx = Math.round(labelH * 0.42);
-        ctx.font = `600 ${fontPx}px system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif`;
-        ctx.textBaseline = 'middle';
-        const y = pageH + labelH / 2;
-        const date = version.date ? version.date.slice(0, 10) : '';
-        ctx.fillStyle = '#7aa2ff';
-        ctx.fillText(date, pad, y);
-        let x = pad + ctx.measureText(date).width + pad * 0.8;
-        ctx.font = `400 ${fontPx}px system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif`;
-        ctx.fillStyle = '#e7eaf0';
-        ctx.fillText(fitText(ctx, `${version.branch} · ${version.msg || version.sha.slice(0, 7)}`, width - x - pad), x, y);
-      }
-
-      const { data } = ctx.getImageData(0, 0, width, height);
-      const palette = quantize(data, 256);
-      const index = applyPalette(data, palette);
-      return { index, palette, width, height, version };
     }
 
-    // ====== Build all frames for the current render settings ======
-    async function buildFrames(width, order, withLabel) {
+    // ====== Build all frames for one set of render settings ======
+    async function buildFrames({ width, order, label }) {
       const list = orderedVersions(order);
-      const results = new Array(list.length).fill(null);
-      let done = 0, next = 0;
-      const report = () => setProgress(done / list.length * 0.9, `Rendering CV versions… ${done}/${list.length}`);
-      report();
+      setProgress(0, `Downloading ${list.length} CV versions…`);
 
-      // Download all PDFs (in parallel) first, so duplicates can be dropped before rendering.
+      // Download all PDFs first, so identical files can be dropped before rendering.
       const pdfs = await Promise.all(list.map((v) => getPdf(v.sha)));
+      let retryable = 0;   // failures that may succeed later (network, 5xx); 404s and broken PDFs won't
       const keep = [];
       let lastHash = null;
       list.forEach((v, i) => {
         const pdf = pdfs[i];
-        if (pdf.error) { showError(`Skipped ${v.branch} @ ${v.sha.slice(0, 7)}: ${pdf.error}`); return; }
+        if (pdf.error) {
+          if (!pdf.permanent) retryable++;
+          showError(`Skipped ${v.branch} @ ${v.sha.slice(0, 7)}: ${pdf.error}`);
+          return;
+        }
         if (pdf.hash && pdf.hash === lastHash) return;   // identical file to the previous frame
         lastHash = pdf.hash;
         keep.push(i);
       });
 
+      const results = new Array(list.length).fill(null);
       const total = keep.length;
+      let done = 0, next = 0;
+      setProgress(0, `Rendering CV versions… 0/${total}`);
       const worker = async () => {
         while (next < total) {
           const i = keep[next++];
           try {
-            results[i] = await renderFrame(list[i], pdfs[i].bytes, width, withLabel);
+            results[i] = await renderFrame(list[i], pdfs[i].bytes, width, label);
           } catch (e) {
             showError(`Could not render ${list[i].branch} @ ${list[i].sha.slice(0, 7)}: ${e.message || e}`);
           }
@@ -399,20 +473,21 @@
         }
       };
       await Promise.all(Array.from({ length: CONCURRENCY }, worker));
-      return results.filter(Boolean);
+      return { frames: results.filter(Boolean), retryable };
     }
 
     // ====== Encode the GIF (cheap: re-run when only FPS / hold / loop change) ======
-    async function encodeGif(frames, fps, holdMs, loop, run) {
-      const delay = Math.round(1000 / fps);
+    // GIF delays are stored in 1/100 s, so this is what the file really uses.
+    const frameDelayMs = (fps) => Math.round(1000 / fps / 10) * 10;
+
+    async function encodeGif(frames, { fps, holdMs, loop }) {
+      const delay = frameDelayMs(fps);
       const gif = GIFEncoder();
       for (let i = 0; i < frames.length; i++) {
-        if (run !== state.encodeRun) return null;         // superseded by a newer request
         const f = frames[i];
-        const isLast = i === frames.length - 1;
         gif.writeFrame(f.index, f.width, f.height, {
           palette: f.palette,
-          delay: isLast ? delay + holdMs : delay,
+          delay: i === frames.length - 1 ? delay + holdMs : delay,
           repeat: loop ? 0 : -1,
         });
         if (i % 4 === 3) {
@@ -436,14 +511,15 @@
       errorsEl.appendChild(div);
     }
     const fmtBytes = (n) => (n > 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.round(n / 1024)} KB`);
-    const currentFps = () => parseFloat(fpsInput.value);
-    const renderKey = () => `${widthSel.value}|${orderSel.value}|${labelChk.checked}`;
-
-    // GIF delays are stored in 1/100 s, so this is what the file really uses.
-    const frameDelayMs = (fps) => Math.round(1000 / fps / 10) * 10;
+    const renderSettings = () => ({ width: Number(widthSel.value), order: orderSel.value, label: labelChk.checked });
+    const keyOf = (s) => `${s.width}|${s.order}|${s.label}`;
+    const renderKey = () => keyOf(renderSettings());
+    const timingParams = () => ({ fps: parseFloat(fpsInput.value), holdMs: Number(holdSel.value), loop: loopChk.checked });
+    const sameTiming = (a, b) => !!a && !!b && a.fps === b.fps && a.holdMs === b.holdMs && a.loop === b.loop;
+    const framesUsable = () => !!state.frames && state.framesKey === renderKey();
 
     function updateFpsText() {
-      const fps = currentFps();
+      const fps = parseFloat(fpsInput.value);
       fpsVal.textContent = `${fps} fps`;
       fpsHint.textContent = `${frameDelayMs(fps)} ms per frame`;
     }
@@ -453,12 +529,14 @@
       if (!labelChk.checked) p.set('label', '0');
       if (!loopChk.checked) p.set('loop', '0');
       if (holdSel.value !== '1000') p.set('hold', holdSel.value);
-      history.replaceState(null, '', `${location.pathname}?${p}`);
+      try { history.replaceState(null, '', `${location.pathname}?${p}`); } catch { /* Safari/Firefox rate-limit replaceState */ }
     }
+    let urlTimer = null;
+    function syncUrlSoon() { clearTimeout(urlTimer); urlTimer = setTimeout(syncUrl, 300); }
 
     function readUrl() {
       const p = new URLSearchParams(location.search);
-      const set = (el, v) => { if (v != null && [...(el.options || [])].some((o) => o.value === v)) el.value = v; };
+      const set = (el, v) => { if (v != null && [...el.options].some((o) => o.value === v)) el.value = v; };
       const fps = parseFloat(p.get('fps'));
       if (fps >= 0.5 && fps <= 20) fpsInput.value = String(Math.round(fps * 2) / 2);
       set(widthSel, p.get('width'));
@@ -470,24 +548,28 @@
 
     function setBusy(busy) {
       state.busy = busy;
-      generateBtn.disabled = busy;
-      generateBtn.textContent = busy ? 'Working…' : (state.frames && state.framesKey === renderKey() ? 'Regenerate GIF' : 'Generate GIF');
+      const ready = state.versions.length > 0;
+      generateBtn.disabled = busy || !ready;
+      generateBtn.textContent = busy ? 'Working…'
+        : !ready ? (state.loadError ? 'Unavailable' : 'Loading…')
+        : framesUsable() && !state.incomplete ? 'Regenerate GIF' : 'Generate GIF';
     }
 
-    function showGif(blob, frames) {
+    function showGif(blob, frames, params) {
       if (state.gifUrl) URL.revokeObjectURL(state.gifUrl);
       state.gifUrl = URL.createObjectURL(blob);
+      state.gifParams = params;
+      state.failedParams = null;
       previewImg.src = state.gifUrl;
       previewImg.style.display = 'block';
       placeholder.style.display = 'none';
-      const fps = currentFps();
       downloadBtn.href = state.gifUrl;
-      downloadBtn.download = `cv-timelapse-${fps}fps-${frames[0].width}px.gif`;
+      downloadBtn.download = `cv-timelapse-${params.fps}fps-${frames[0].width}px.gif`;
       downloadBtn.setAttribute('aria-disabled', 'false');
-      const seconds = (frames.length * frameDelayMs(fps) + Number(holdSel.value)) / 1000;
+      const seconds = (frames.length * frameDelayMs(params.fps) + params.holdMs) / 1000;
       const first = frames[0].version.date?.slice(0, 10), last = frames[frames.length - 1].version.date?.slice(0, 10);
       metaEl.innerHTML = '';
-      for (const text of [`${frames.length} frames`, `${fps} fps`, `${seconds.toFixed(1)} s ${loopChk.checked ? 'per loop' : 'long'}`,
+      for (const text of [`${frames.length} frames`, `${params.fps} fps`, `${seconds.toFixed(1)} s ${params.loop ? 'per loop' : 'long'}`,
                           `${frames[0].width}×${frames[0].height}`, fmtBytes(blob.size),
                           first && last ? `${first} → ${last}` : null].filter(Boolean)) {
         const span = document.createElement('span');
@@ -497,60 +579,86 @@
       }
     }
 
+    // Timing the preview doesn't show yet, and that hasn't just failed to encode (no retry loop).
+    const timingPending = () => {
+      const t = timingParams();
+      return !sameTiming(t, state.gifParams) && !sameTiming(t, state.failedParams);
+    };
+
+    // After any job, point out settings the preview doesn't reflect yet.
+    function afterJob() {
+      if (!state.frames) return;
+      if (!framesUsable()) statusEl.textContent = 'Settings changed: click Generate GIF to apply them.';
+      else if (timingPending()) scheduleReencode();
+    }
+
     // ====== Actions ======
     async function generate() {
-      if (state.busy) return;
+      if (state.busy || !state.versions.length) return;
       setBusy(true);
       errorsEl.innerHTML = '';
-      const run = ++state.encodeRun;
+      const render = renderSettings();   // snapshot: controls may change while this runs
+      const params = timingParams();
       try {
-        if (!state.frames || state.framesKey !== renderKey()) {
+        if (!state.frames || state.framesKey !== keyOf(render) || state.incomplete) {
           state.frames = null;
-          const frames = await buildFrames(Number(widthSel.value), orderSel.value, labelChk.checked);
+          state.framesKey = '';
+          const { frames, retryable } = await buildFrames(render);
           if (!frames.length) throw new Error('No CV versions could be rendered.');
           state.frames = frames;
-          state.framesKey = renderKey();
+          state.framesKey = keyOf(render);
+          state.incomplete = retryable > 0;
         }
-        const blob = await encodeGif(state.frames, currentFps(), Number(holdSel.value), loopChk.checked, run);
-        if (blob) {
-          showGif(blob, state.frames);
-          setProgress(1, `Done: ${state.frames.length} versions, ${fmtBytes(blob.size)}.`);
-        }
+        const blob = await encodeGif(state.frames, params);
+        showGif(blob, state.frames, params);
+        setProgress(1, state.incomplete
+          ? `Done with ${state.frames.length} versions; some downloads failed (click Generate GIF to retry them).`
+          : `Done: ${state.frames.length} versions, ${fmtBytes(blob.size)}.`);
       } catch (e) {
+        state.failedParams = params;
         showError(e.message || String(e));
         setProgress(0, 'Something went wrong; see the message below.');
       } finally {
         setBusy(false);
       }
+      afterJob();
     }
 
-    // FPS / hold / loop only change frame timing, so re-encode the cached frames right away.
+    // FPS / hold / loop only change frame timing, so re-encode the cached frames.
     let reencodeTimer = null;
+    function scheduleReencode() {
+      clearTimeout(reencodeTimer);
+      reencodeTimer = setTimeout(reencode, 250);
+    }
+
+    async function reencode() {
+      if (!framesUsable() || !timingPending()) return;
+      if (state.busy) { scheduleReencode(); return; }
+      setBusy(true);
+      const params = timingParams();
+      try {
+        const blob = await encodeGif(state.frames, params);
+        showGif(blob, state.frames, params);
+        setProgress(1, `Updated to ${params.fps} fps (${fmtBytes(blob.size)}).`);
+      } catch (e) {
+        state.failedParams = params;
+        showError(e.message || String(e));
+      } finally {
+        setBusy(false);
+      }
+      afterJob();
+    }
+
     function onTimingChange() {
       updateFpsText();
-      syncUrl();
-      if (!state.frames || state.framesKey !== renderKey()) return;
-      clearTimeout(reencodeTimer);
-      reencodeTimer = setTimeout(async () => {
-        if (state.busy) { onTimingChange(); return; }
-        const run = ++state.encodeRun;
-        setBusy(true);
-        try {
-          const blob = await encodeGif(state.frames, currentFps(), Number(holdSel.value), loopChk.checked, run);
-          if (blob) {
-            showGif(blob, state.frames);
-            setProgress(1, `Updated to ${currentFps()} fps (${fmtBytes(blob.size)}).`);
-          }
-        } finally {
-          setBusy(false);
-        }
-      }, 250);
+      syncUrlSoon();
+      scheduleReencode();
     }
 
     function onRenderChange() {
-      syncUrl();
-      if (!state.busy) setBusy(false);   // refresh the button label
-      if (state.frames) statusEl.textContent = 'Settings changed: click Generate GIF to apply them.';
+      syncUrlSoon();
+      setBusy(state.busy);   // refresh the button label
+      if (!state.busy) afterJob();
     }
 
     fpsInput.addEventListener('input', onTimingChange);
@@ -570,12 +678,13 @@
         if (!state.versions.length) throw new Error(`No commits changed ${FILE_PATH}.`);
         const branches = new Set(state.versions.map((v) => v.branch)).size;
         statusEl.textContent = `Found ${state.versions.length} CV versions across ${branches} branches.`;
-        setBusy(false);
       } catch (e) {
+        state.versions = [];
+        state.loadError = true;
         showError(e.message || String(e));
         statusEl.textContent = 'Could not load the CV history.';
-        generateBtn.textContent = 'Unavailable';
       }
+      setBusy(false);
     })();
   </script>
 </body>
