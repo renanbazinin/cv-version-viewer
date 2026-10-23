@@ -1,0 +1,582 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>CV Timelapse GIF</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="description" content="Generate an animated GIF of every version of the CV, with adjustable FPS." />
+  <style>
+    :root {
+      --bg: #0b0c10;
+      --fg: #e7eaf0;
+      --muted: #a9b1c6;
+      --card: #121724;
+      --border: #232a38;
+      --accent: #7aa2ff;
+      --bad: #ff8c8c;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; background: var(--bg); color: var(--fg);
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji";
+    }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    header {
+      position: sticky; top: 0; z-index: 5;
+      background: linear-gradient(180deg, rgba(11,12,16,.98), rgba(11,12,16,.92));
+      backdrop-filter: saturate(1.1) blur(6px);
+      border-bottom: 1px solid var(--border);
+      padding: 10px 16px;
+      display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap;
+    }
+    .title { font-weight: 600; letter-spacing: .2px; }
+    .nav { font-size: 13px; display: flex; gap: 14px; }
+
+    main { max-width: 1100px; margin: 16px auto 80px; padding: 0 16px; display: grid; gap: 16px; }
+    @media (min-width: 900px) { main { grid-template-columns: 340px 1fr; align-items: start; } }
+
+    .card { background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 14px; }
+    .card h2 { font-size: 14px; margin: 0 0 12px; color: var(--muted); font-weight: 600; letter-spacing: .3px; text-transform: uppercase; }
+
+    .field { display: grid; gap: 6px; margin-bottom: 14px; }
+    .field label, .check { font-size: 13px; color: var(--muted); }
+    .field input[type="range"] { width: 100%; accent-color: var(--accent); }
+    .field select {
+      width: 100%; padding: 7px 10px; border-radius: 10px; border: 1px solid var(--border);
+      background: #0f1423; color: var(--fg); font: inherit; font-size: 14px;
+    }
+    .fps-row { display: flex; justify-content: space-between; align-items: baseline; }
+    .fps-val { font-size: 22px; font-weight: 600; }
+    .hint { font-size: 12px; color: var(--muted); }
+    .check { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; cursor: pointer; }
+    .check input { accent-color: var(--accent); }
+
+    .btn {
+      padding: 9px 14px; border: 1px solid var(--border); border-radius: 10px;
+      background: #0f1423; color: var(--fg); cursor: pointer; font: inherit; font-size: 14px;
+      display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    }
+    .btn.primary { background: var(--accent); border-color: var(--accent); color: #0b0c10; font-weight: 600; }
+    .btn[disabled], .btn[aria-disabled="true"] { opacity: .5; cursor: not-allowed; pointer-events: none; }
+    .buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 6px; }
+
+    .progress { height: 8px; border: 1px solid var(--border); border-radius: 8px; background: #0e1220; overflow: hidden; margin-top: 14px; }
+    .bar { height: 100%; width: 0%; background: var(--accent); transition: width .15s linear; }
+    #status { margin-top: 8px; font-size: 13px; color: var(--muted); min-height: 1.3em; }
+
+    .preview-wrap { display: grid; place-items: center; min-height: 420px; }
+    .preview-wrap img { max-width: 100%; max-height: 80vh; border: 1px solid var(--border); border-radius: 10px; background: #fff; display: none; }
+    .placeholder { color: var(--muted); font-size: 14px; text-align: center; padding: 24px; }
+    .meta { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; justify-content: center; }
+    .pill { font-size: 12px; color: var(--muted); background: #0f1423; border: 1px solid var(--border); padding: 5px 10px; border-radius: 999px; }
+
+    #errors { display: grid; gap: 8px; }
+    .error { color: var(--bad); font-size: 13px; border: 1px solid #6e2326; background: #270d10; border-radius: 10px; padding: 10px 12px; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="title">CV Timelapse GIF</div>
+    <nav class="nav">
+      <a href="../">Version viewer</a>
+      <a href="../simulateTimelapse.html">Live timelapse</a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="card" aria-labelledby="settings-title">
+      <h2 id="settings-title">Settings</h2>
+
+      <div class="field">
+        <div class="fps-row">
+          <label for="fps">Speed (FPS)</label>
+          <span class="fps-val" id="fpsVal">2 fps</span>
+        </div>
+        <input id="fps" type="range" min="0.5" max="20" step="0.5" value="2" />
+        <span class="hint" id="fpsHint">500 ms per frame</span>
+      </div>
+
+      <div class="field">
+        <label for="width">GIF width</label>
+        <select id="width">
+          <option value="480">480 px (smallest file)</option>
+          <option value="600" selected>600 px</option>
+          <option value="800">800 px</option>
+          <option value="1000">1000 px (sharpest, largest file)</option>
+        </select>
+      </div>
+
+      <div class="field">
+        <label for="order">Frame order</label>
+        <select id="order">
+          <option value="date" selected>By commit date (all branches merged)</option>
+          <option value="branch">By branch (oldest branch first)</option>
+        </select>
+      </div>
+
+      <div class="field">
+        <label for="hold">Hold last frame</label>
+        <select id="hold">
+          <option value="0">No extra hold</option>
+          <option value="1000" selected>+1 second</option>
+          <option value="2000">+2 seconds</option>
+          <option value="3000">+3 seconds</option>
+        </select>
+      </div>
+
+      <label class="check"><input type="checkbox" id="label" checked /> Show date, branch and commit under each frame</label>
+      <label class="check"><input type="checkbox" id="loop" checked /> Loop forever</label>
+
+      <div class="buttons">
+        <button id="generateBtn" class="btn primary" type="button" disabled>Loading…</button>
+        <a id="downloadBtn" class="btn" aria-disabled="true" download="cv-timelapse.gif">Download GIF</a>
+      </div>
+
+      <div class="progress" aria-hidden="true"><div id="progressBar" class="bar"></div></div>
+      <div id="status" role="status" aria-live="polite">Collecting CV versions…</div>
+    </section>
+
+    <section class="card" aria-labelledby="preview-title">
+      <h2 id="preview-title">Preview</h2>
+      <div class="preview-wrap">
+        <img id="preview" alt="Animated GIF of the CV changing over time" />
+        <div class="placeholder" id="placeholder">Your GIF will appear here after you click <b>Generate GIF</b>.</div>
+      </div>
+      <div class="meta" id="meta"></div>
+    </section>
+
+    <section id="errors" aria-live="polite"></section>
+  </main>
+
+  <!-- PDF.js (v3, same build as the other pages) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script type="module">
+    import { GIFEncoder, quantize, applyPalette } from 'https://cdn.jsdelivr.net/npm/gifenc@1.0.3/dist/gifenc.esm.js';
+
+    // ====== Repo config (same as the other pages) ======
+    const GITHUB_REPO_OWNER = 'renanbazinin';
+    const GITHUB_REPO_NAME  = 'CV-RENAN';
+    const FILE_PATH         = 'CV-RenanBazinin.pdf';
+    const API               = `https://api.github.com/repos/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}`;
+    const CONCURRENCY       = 3;              // parallel PDF downloads/renders
+    const PAGE_ASPECT       = Math.SQRT2;     // A4 portrait; every frame gets the same size
+    const CACHE_KEY         = `cv-gif-commits:${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}`;
+    const CACHE_TTL_MS      = 10 * 60 * 1000; // reuse the commit list for 10 min (GitHub API rate limit)
+
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+    // ====== DOM ======
+    const $ = (id) => document.getElementById(id);
+    const fpsInput = $('fps'), fpsVal = $('fpsVal'), fpsHint = $('fpsHint');
+    const widthSel = $('width'), orderSel = $('order'), holdSel = $('hold');
+    const labelChk = $('label'), loopChk = $('loop');
+    const generateBtn = $('generateBtn'), downloadBtn = $('downloadBtn');
+    const progressBar = $('progressBar'), statusEl = $('status');
+    const previewImg = $('preview'), placeholder = $('placeholder'), metaEl = $('meta'), errorsEl = $('errors');
+
+    // ====== State ======
+    const state = {
+      versions: [],          // [{ branch, sha, msg, date }] — commits that touched the PDF
+      pdfCache: new Map(),   // sha -> Promise<{ bytes, hash } | { error }>
+      frames: null,          // quantized frames for the current render settings
+      framesKey: '',         // settings the frames were rendered with
+      gifUrl: null,
+      busy: false,
+      encodeRun: 0,          // bumps to cancel a stale re-encode
+    };
+
+    // ====== GitHub helpers (token handling matches the other pages) ======
+    let githubTokenCache;
+    async function ensureGithubToken() {
+      if (githubTokenCache !== undefined) return githubTokenCache;
+      githubTokenCache = null;
+      try {
+        const stored = window.localStorage?.getItem('GITHUB_TOKEN');
+        if (stored && stored.trim()) githubTokenCache = stored.trim();
+      } catch { /* storage blocked */ }
+      if (!githubTokenCache) {
+        try {
+          const res = await fetch('../.env', { cache: 'no-store' });
+          if (res.ok) {
+            const m = (await res.text()).match(/^\s*GITHUB_TOKEN\s*=\s*(.+)\s*$/m);
+            const value = m && m[1].trim().replace(/^['"]|['"]$/g, '');
+            if (value) githubTokenCache = value;
+          }
+        } catch { /* no local .env */ }
+      }
+      return githubTokenCache;
+    }
+
+    async function githubJson(url) {
+      const headers = new Headers({ Accept: 'application/vnd.github+json' });
+      const token = await ensureGithubToken();
+      if (token) headers.set('Authorization', `Bearer ${token}`);
+      const res = await fetch(url, { headers });
+      if (res.status === 403 && res.headers.get('x-ratelimit-remaining') === '0') {
+        const reset = Number(res.headers.get('x-ratelimit-reset')) * 1000;
+        const when = reset ? new Date(reset).toLocaleTimeString() : 'later';
+        throw new Error(`GitHub API rate limit reached. Try again after ${when}.`);
+      }
+      if (!res.ok) throw new Error(`GitHub API HTTP ${res.status} for ${url}`);
+      const next = (res.headers.get('Link') || '').match(/<([^>]+)>;\s*rel="next"/);
+      return { data: await res.json(), next: next ? next[1] : null };
+    }
+
+    async function githubAll(url, maxPages = 20) {
+      const out = [];
+      for (let page = 0; url && page < maxPages; page++) {
+        const { data, next } = await githubJson(url);
+        out.push(...data);
+        url = next;
+      }
+      return out;
+    }
+
+    // Every commit (on any branch) that changed the PDF, deduplicated by SHA.
+    async function loadVersions() {
+      try {
+        const cached = JSON.parse(sessionStorage.getItem(CACHE_KEY) || 'null');
+        if (cached && Date.now() - cached.at < CACHE_TTL_MS && cached.versions?.length) return cached.versions;
+      } catch { /* ignore bad cache */ }
+
+      const branches = await githubAll(`${API}/branches?per_page=100`);
+      const bySha = new Map();
+      for (const b of branches) {
+        const commits = await githubAll(
+          `${API}/commits?sha=${encodeURIComponent(b.name)}&path=${encodeURIComponent(FILE_PATH)}&per_page=100`);
+        for (const c of commits) {
+          if (bySha.has(c.sha)) continue;   // shared history: keep the first branch that has it
+          bySha.set(c.sha, {
+            branch: b.name,
+            sha: c.sha,
+            msg: (c.commit?.message || '').split('\n')[0],
+            date: c.commit?.committer?.date || c.commit?.author?.date || null,
+          });
+        }
+      }
+      const versions = [...bySha.values()];
+      try { sessionStorage.setItem(CACHE_KEY, JSON.stringify({ at: Date.now(), versions })); } catch { /* quota */ }
+      return versions;
+    }
+
+    function orderedVersions(order) {
+      const time = (v) => (v.date ? new Date(v.date).getTime() : 0);
+      const list = state.versions.slice();
+      if (order === 'branch') {
+        // Branches oldest-first by their newest PDF change; commits oldest-first within each branch.
+        const newest = new Map();
+        for (const v of list) newest.set(v.branch, Math.max(newest.get(v.branch) || 0, time(v)));
+        list.sort((a, b) => (newest.get(a.branch) - newest.get(b.branch)) || a.branch.localeCompare(b.branch) || (time(a) - time(b)));
+      } else {
+        list.sort((a, b) => time(a) - time(b));
+      }
+      return list;
+    }
+
+    // ====== PDF download (cached) ======
+    function getPdf(sha) {
+      if (!state.pdfCache.has(sha)) {
+        const url = `https://raw.githubusercontent.com/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}/${sha}/${FILE_PATH}`;
+        state.pdfCache.set(sha, (async () => {
+          try {
+            const res = await fetch(url);
+            if (!res.ok) return { error: `PDF not found (HTTP ${res.status})` };
+            const bytes = await res.arrayBuffer();
+            let hash = null;
+            if (crypto?.subtle) {
+              const digest = await crypto.subtle.digest('SHA-256', bytes);
+              hash = Array.from(new Uint8Array(digest), (x) => x.toString(16).padStart(2, '0')).join('');
+            }
+            return { bytes, hash };
+          } catch (e) {
+            return { error: e.message || String(e) };
+          }
+        })());
+      }
+      return state.pdfCache.get(sha);
+    }
+
+    // ====== Render one version to a fixed-size RGBA frame ======
+    function frameSize(width, withLabel) {
+      const pageH = Math.round(width * PAGE_ASPECT);
+      const labelH = withLabel ? Math.max(28, Math.round(width * 0.055)) : 0;
+      return { pageH, labelH, height: pageH + labelH };
+    }
+
+    function fitText(ctx, text, maxWidth) {
+      if (ctx.measureText(text).width <= maxWidth) return text;
+      let lo = 0, hi = text.length;
+      while (lo < hi) {
+        const mid = (lo + hi + 1) >> 1;
+        if (ctx.measureText(text.slice(0, mid) + '…').width <= maxWidth) lo = mid; else hi = mid - 1;
+      }
+      return text.slice(0, lo) + '…';
+    }
+
+    async function renderFrame(version, bytes, width, withLabel) {
+      const { pageH, labelH, height } = frameSize(width, withLabel);
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, width, pageH);
+
+      // PDF.js takes ownership of the buffer, so hand it a copy and keep the cache intact.
+      const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(bytes.slice(0)) }).promise;
+      try {
+        const page = await pdf.getPage(1);
+        const base = page.getViewport({ scale: 1 });
+        const scale = Math.min(width / base.width, pageH / base.height);
+        const viewport = page.getViewport({ scale });
+        const off = document.createElement('canvas');
+        off.width = Math.round(viewport.width);
+        off.height = Math.round(viewport.height);
+        const offCtx = off.getContext('2d');
+        offCtx.fillStyle = '#ffffff';
+        offCtx.fillRect(0, 0, off.width, off.height);
+        await page.render({ canvasContext: offCtx, viewport }).promise;
+        ctx.drawImage(off, Math.round((width - off.width) / 2), Math.round((pageH - off.height) / 2));
+      } finally {
+        await pdf.destroy();
+      }
+
+      if (withLabel) {
+        ctx.fillStyle = '#0b0c10';
+        ctx.fillRect(0, pageH, width, labelH);
+        const pad = Math.round(labelH * 0.45);
+        const fontPx = Math.round(labelH * 0.42);
+        ctx.font = `600 ${fontPx}px system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif`;
+        ctx.textBaseline = 'middle';
+        const y = pageH + labelH / 2;
+        const date = version.date ? version.date.slice(0, 10) : '';
+        ctx.fillStyle = '#7aa2ff';
+        ctx.fillText(date, pad, y);
+        let x = pad + ctx.measureText(date).width + pad * 0.8;
+        ctx.font = `400 ${fontPx}px system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif`;
+        ctx.fillStyle = '#e7eaf0';
+        ctx.fillText(fitText(ctx, `${version.branch} · ${version.msg || version.sha.slice(0, 7)}`, width - x - pad), x, y);
+      }
+
+      const { data } = ctx.getImageData(0, 0, width, height);
+      const palette = quantize(data, 256);
+      const index = applyPalette(data, palette);
+      return { index, palette, width, height, version };
+    }
+
+    // ====== Build all frames for the current render settings ======
+    async function buildFrames(width, order, withLabel) {
+      const list = orderedVersions(order);
+      const results = new Array(list.length).fill(null);
+      let done = 0, next = 0;
+      const report = () => setProgress(done / list.length * 0.9, `Rendering CV versions… ${done}/${list.length}`);
+      report();
+
+      // Download all PDFs (in parallel) first, so duplicates can be dropped before rendering.
+      const pdfs = await Promise.all(list.map((v) => getPdf(v.sha)));
+      const keep = [];
+      let lastHash = null;
+      list.forEach((v, i) => {
+        const pdf = pdfs[i];
+        if (pdf.error) { showError(`Skipped ${v.branch} @ ${v.sha.slice(0, 7)}: ${pdf.error}`); return; }
+        if (pdf.hash && pdf.hash === lastHash) return;   // identical file to the previous frame
+        lastHash = pdf.hash;
+        keep.push(i);
+      });
+
+      const total = keep.length;
+      const worker = async () => {
+        while (next < total) {
+          const i = keep[next++];
+          try {
+            results[i] = await renderFrame(list[i], pdfs[i].bytes, width, withLabel);
+          } catch (e) {
+            showError(`Could not render ${list[i].branch} @ ${list[i].sha.slice(0, 7)}: ${e.message || e}`);
+          }
+          done++;
+          setProgress(done / total * 0.9, `Rendering CV versions… ${done}/${total}`);
+        }
+      };
+      await Promise.all(Array.from({ length: CONCURRENCY }, worker));
+      return results.filter(Boolean);
+    }
+
+    // ====== Encode the GIF (cheap: re-run when only FPS / hold / loop change) ======
+    async function encodeGif(frames, fps, holdMs, loop, run) {
+      const delay = Math.round(1000 / fps);
+      const gif = GIFEncoder();
+      for (let i = 0; i < frames.length; i++) {
+        if (run !== state.encodeRun) return null;         // superseded by a newer request
+        const f = frames[i];
+        const isLast = i === frames.length - 1;
+        gif.writeFrame(f.index, f.width, f.height, {
+          palette: f.palette,
+          delay: isLast ? delay + holdMs : delay,
+          repeat: loop ? 0 : -1,
+        });
+        if (i % 4 === 3) {
+          setProgress(0.9 + (i + 1) / frames.length * 0.1, `Encoding GIF… ${i + 1}/${frames.length}`);
+          await new Promise((r) => setTimeout(r));
+        }
+      }
+      gif.finish();
+      return new Blob([gif.bytes()], { type: 'image/gif' });
+    }
+
+    // ====== UI helpers ======
+    function setProgress(fraction, text) {
+      progressBar.style.width = `${Math.round(Math.max(0, Math.min(1, fraction)) * 100)}%`;
+      if (text) statusEl.textContent = text;
+    }
+    function showError(msg) {
+      const div = document.createElement('div');
+      div.className = 'error';
+      div.textContent = msg;
+      errorsEl.appendChild(div);
+    }
+    const fmtBytes = (n) => (n > 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.round(n / 1024)} KB`);
+    const currentFps = () => parseFloat(fpsInput.value);
+    const renderKey = () => `${widthSel.value}|${orderSel.value}|${labelChk.checked}`;
+
+    // GIF delays are stored in 1/100 s, so this is what the file really uses.
+    const frameDelayMs = (fps) => Math.round(1000 / fps / 10) * 10;
+
+    function updateFpsText() {
+      const fps = currentFps();
+      fpsVal.textContent = `${fps} fps`;
+      fpsHint.textContent = `${frameDelayMs(fps)} ms per frame`;
+    }
+
+    function syncUrl() {
+      const p = new URLSearchParams({ fps: fpsInput.value, width: widthSel.value, order: orderSel.value });
+      if (!labelChk.checked) p.set('label', '0');
+      if (!loopChk.checked) p.set('loop', '0');
+      if (holdSel.value !== '1000') p.set('hold', holdSel.value);
+      history.replaceState(null, '', `${location.pathname}?${p}`);
+    }
+
+    function readUrl() {
+      const p = new URLSearchParams(location.search);
+      const set = (el, v) => { if (v != null && [...(el.options || [])].some((o) => o.value === v)) el.value = v; };
+      const fps = parseFloat(p.get('fps'));
+      if (fps >= 0.5 && fps <= 20) fpsInput.value = String(Math.round(fps * 2) / 2);
+      set(widthSel, p.get('width'));
+      set(orderSel, p.get('order'));
+      set(holdSel, p.get('hold'));
+      if (p.get('label') === '0') labelChk.checked = false;
+      if (p.get('loop') === '0') loopChk.checked = false;
+    }
+
+    function setBusy(busy) {
+      state.busy = busy;
+      generateBtn.disabled = busy;
+      generateBtn.textContent = busy ? 'Working…' : (state.frames && state.framesKey === renderKey() ? 'Regenerate GIF' : 'Generate GIF');
+    }
+
+    function showGif(blob, frames) {
+      if (state.gifUrl) URL.revokeObjectURL(state.gifUrl);
+      state.gifUrl = URL.createObjectURL(blob);
+      previewImg.src = state.gifUrl;
+      previewImg.style.display = 'block';
+      placeholder.style.display = 'none';
+      const fps = currentFps();
+      downloadBtn.href = state.gifUrl;
+      downloadBtn.download = `cv-timelapse-${fps}fps-${frames[0].width}px.gif`;
+      downloadBtn.setAttribute('aria-disabled', 'false');
+      const seconds = (frames.length * frameDelayMs(fps) + Number(holdSel.value)) / 1000;
+      const first = frames[0].version.date?.slice(0, 10), last = frames[frames.length - 1].version.date?.slice(0, 10);
+      metaEl.innerHTML = '';
+      for (const text of [`${frames.length} frames`, `${fps} fps`, `${seconds.toFixed(1)} s ${loopChk.checked ? 'per loop' : 'long'}`,
+                          `${frames[0].width}×${frames[0].height}`, fmtBytes(blob.size),
+                          first && last ? `${first} → ${last}` : null].filter(Boolean)) {
+        const span = document.createElement('span');
+        span.className = 'pill';
+        span.textContent = text;
+        metaEl.appendChild(span);
+      }
+    }
+
+    // ====== Actions ======
+    async function generate() {
+      if (state.busy) return;
+      setBusy(true);
+      errorsEl.innerHTML = '';
+      const run = ++state.encodeRun;
+      try {
+        if (!state.frames || state.framesKey !== renderKey()) {
+          state.frames = null;
+          const frames = await buildFrames(Number(widthSel.value), orderSel.value, labelChk.checked);
+          if (!frames.length) throw new Error('No CV versions could be rendered.');
+          state.frames = frames;
+          state.framesKey = renderKey();
+        }
+        const blob = await encodeGif(state.frames, currentFps(), Number(holdSel.value), loopChk.checked, run);
+        if (blob) {
+          showGif(blob, state.frames);
+          setProgress(1, `Done: ${state.frames.length} versions, ${fmtBytes(blob.size)}.`);
+        }
+      } catch (e) {
+        showError(e.message || String(e));
+        setProgress(0, 'Something went wrong; see the message below.');
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    // FPS / hold / loop only change frame timing, so re-encode the cached frames right away.
+    let reencodeTimer = null;
+    function onTimingChange() {
+      updateFpsText();
+      syncUrl();
+      if (!state.frames || state.framesKey !== renderKey()) return;
+      clearTimeout(reencodeTimer);
+      reencodeTimer = setTimeout(async () => {
+        if (state.busy) { onTimingChange(); return; }
+        const run = ++state.encodeRun;
+        setBusy(true);
+        try {
+          const blob = await encodeGif(state.frames, currentFps(), Number(holdSel.value), loopChk.checked, run);
+          if (blob) {
+            showGif(blob, state.frames);
+            setProgress(1, `Updated to ${currentFps()} fps (${fmtBytes(blob.size)}).`);
+          }
+        } finally {
+          setBusy(false);
+        }
+      }, 250);
+    }
+
+    function onRenderChange() {
+      syncUrl();
+      if (!state.busy) setBusy(false);   // refresh the button label
+      if (state.frames) statusEl.textContent = 'Settings changed: click Generate GIF to apply them.';
+    }
+
+    fpsInput.addEventListener('input', onTimingChange);
+    holdSel.addEventListener('change', onTimingChange);
+    loopChk.addEventListener('change', onTimingChange);
+    widthSel.addEventListener('change', onRenderChange);
+    orderSel.addEventListener('change', onRenderChange);
+    labelChk.addEventListener('change', onRenderChange);
+    generateBtn.addEventListener('click', generate);
+
+    // ====== Boot ======
+    (async function init() {
+      readUrl();
+      updateFpsText();
+      try {
+        state.versions = await loadVersions();
+        if (!state.versions.length) throw new Error(`No commits changed ${FILE_PATH}.`);
+        const branches = new Set(state.versions.map((v) => v.branch)).size;
+        statusEl.textContent = `Found ${state.versions.length} CV versions across ${branches} branches.`;
+        setBusy(false);
+      } catch (e) {
+        showError(e.message || String(e));
+        statusEl.textContent = 'Could not load the CV history.';
+        generateBtn.textContent = 'Unavailable';
+      }
+    })();
+  </script>
+</body>
+</html>
