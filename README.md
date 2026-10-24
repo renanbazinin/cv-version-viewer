@@ -23,6 +23,10 @@
 
 Perfect for tracking changes to your CV over time, comparing different versions, and viewing how your resume evolved across various commits and branches.
 
+## 🔑 Rate limits
+
+The pages call the GitHub API without a token (60 requests an hour per IP). If you hit the limit, store a read-only token in your own browser from the dev-tools console: `localStorage.setItem('GITHUB_TOKEN', '<token>')`. The token stays in that browser; the site never loads it from a file.
+
 ## 🛠️ Tech Stack
 
 - **PDF.js** - Mozilla's PDF rendering library

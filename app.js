@@ -62,25 +62,6 @@ document.addEventListener('DOMContentLoaded', () => {
             console.info('Unable to read GitHub token from localStorage.', err);
         }
 
-        // Fallback to .env file if no localStorage token was found
-        if (!githubTokenCache) {
-            try {
-                const res = await fetch('./.env', { cache: 'no-store' });
-                if (res.ok) {
-                    const text = await res.text();
-                    const match = text.match(/^\s*GITHUB_TOKEN\s*=\s*(.+)\s*$/m);
-                    if (match) {
-                        const value = match[1].trim().replace(/^['"]|['"]$/g, '');
-                        if (value) {
-                            githubTokenCache = value;
-                        }
-                    }
-                }
-            } catch (err) {
-                console.info('GitHub token not found in .env (falling back to unauthenticated requests).', err);
-            }
-        }
-
         return githubTokenCache;
     }
 

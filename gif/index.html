@@ -201,16 +201,6 @@
         const stored = window.localStorage?.getItem('GITHUB_TOKEN');
         if (stored && stored.trim()) githubTokenCache = stored.trim();
       } catch { /* storage blocked */ }
-      if (!githubTokenCache) {
-        try {
-          const res = await fetch('../.env', { cache: 'no-store' });
-          if (res.ok) {
-            const m = (await res.text()).match(/^\s*GITHUB_TOKEN\s*=\s*(.+)\s*$/m);
-            const value = m && m[1].trim().replace(/^['"]|['"]$/g, '');
-            if (value) githubTokenCache = value;
-          }
-        } catch { /* no local .env */ }
-      }
       return githubTokenCache;
     }
 
