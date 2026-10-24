@@ -156,7 +156,7 @@
     const GITHUB_REPO_NAME  = 'CV-RENAN';
     const FILE_PATH         = 'CV-RenanBazinin.pdf';
     const BRANCHES_API      = `https://api.github.com/repos/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}/branches`;
-  // Optional token if you hit rate limits (localStorage or .env)
+  // Optional token if you hit rate limits (read from this browser's localStorage only)
   let githubTokenCache;
 
     // Render scale (width in px for pre-rendered images)
@@ -201,24 +201,6 @@
         }
       } catch (err) {
         console.info('Unable to read GitHub token from localStorage.', err);
-      }
-
-      if (!githubTokenCache) {
-        try {
-          const res = await fetch('./.env', { cache: 'no-store' });
-          if (res.ok) {
-            const text = await res.text();
-            const match = text.match(/^\s*GITHUB_TOKEN\s*=\s*(.+)\s*$/m);
-            if (match) {
-              const value = match[1].trim().replace(/^['"]|['"]$/g, '');
-              if (value) {
-                githubTokenCache = value;
-              }
-            }
-          }
-        } catch (err) {
-          console.info('GitHub token not found in .env (using unauthenticated requests).', err);
-        }
       }
 
       return githubTokenCache;
